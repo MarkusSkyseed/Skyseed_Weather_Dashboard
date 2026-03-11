@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wetter & Pflanzenwachstum Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <header>
+        <h1>Wetter & Pflanzenwachstum</h1>
+    </header>
+    <main>
+        <section class="controls-card">
+            <form id="weather-form">
+                <div class="input-group">
+                    <label for="coordinates">Koordinaten (Lat, Lon)</label>
+                    <input type="text" id="coordinates" required placeholder="z.B. 52.0728, 12.5552">
+                </div>
+                <button type="button" id="btn-locate" class="btn-secondary">Standort ermitteln</button>
+
+                <div class="input-group">
+                    <label for="start-date">Startdatum</label>
+                    <input type="date" id="start-date" required>
+                </div>
+                <div class="input-group">
+                    <label for="end-date">Enddatum</label>
+                    <input type="date" id="end-date" required>
+                </div>
+                <button type="submit" class="btn-primary">Daten abrufen</button>
+            </form>
+            <div id="loading" class="hidden">Daten werden geladen...</div>
+            <div id="error-message" class="error hidden"></div>
+        </section>
+
+        <section id="dashboard" class="dashboard hidden">
+            <div class="kpi-grid">
+                <div class="kpi-card">
+                    <h3>Temperatur Extremwerte</h3>
+                    <p id="kpi-temp-max" class="kpi-value">-- °C</p>
+                    <span id="kpi-temp-min" class="kpi-sub">-- °C</span>
+                </div>
+                <div class="kpi-card">
+                    <h3>Summe Niederschlag</h3>
+                    <p id="kpi-precip-sum" class="kpi-value">-- mm</p>
+                    <span class="kpi-sub">im Zeitraum</span>
+                </div>
+                <div class="kpi-card">
+                    <h3>Max. Niederschlag / Tag</h3>
+                    <p id="kpi-precip-max" class="kpi-value">-- mm</p>
+                </div>
+                <div class="kpi-card">
+                    <h3>Max. Windstärke</h3>
+                    <p id="kpi-wind-max" class="kpi-value">-- km/h</p>
+                </div>
+                <div class="kpi-card">
+                    <h3>Frosttage</h3>
+                    <p id="kpi-frost-days" class="kpi-value">--</p>
+                    <span class="kpi-sub">Tage < 0°C</span>
+                </div>
+            </div>
+
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>Temperaturverlauf</h3>
+                    <canvas id="tempChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>Niederschlag (pro Tag)</h3>
+                    <canvas id="precipDailyChart"></canvas>
+                </div>
+                <div class="chart-card">
+                    <h3>Niederschlag (pro Monat)</h3>
+                    <canvas id="precipMonthlyChart"></canvas>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
