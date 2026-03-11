@@ -817,30 +817,89 @@ function applyChartZoom() {
     const startIdx = parseInt(document.getElementById('zoom-slider-start').value);
     const endIdx = parseInt(document.getElementById('zoom-slider-end').value);
     
-    // We already enforced start < end in updateChartZoom, so we can use them directly
-    const labels = currentChartData.times.slice(startIdx, endIdx + 1);
-    const displayRange = `${labels[0]} bis ${labels[labels.length-1]}`;
+    // Slice data for main chart and calculations
+    const sliceTimes = currentChartData.times.slice(startIdx, endIdx + 1);
+    const sliceTempMax = currentChartData.tempMax.slice(startIdx, endIdx + 1);
+    const sliceTempMin = currentChartData.tempMin.slice(startIdx, endIdx + 1);
+    const slicePrecip = currentChartData.precipSum.slice(startIdx, endIdx + 1);
+
+    // 1. Update Zoom Text Display
+    const displayRange = `${sliceTimes[0]} bis ${sliceTimes[sliceTimes.length-1]}`;
     document.getElementById('zoom-period-display').innerText = displayRange;
 
-    // Update Chart Data
-    mainChartInst.data.labels = labels;
-    
-    // Map datasets (Temperature, Precip, GDD)
-    const datasets = [
-        currentChartData.tempMax,
-        currentChartData.tempMin,
-        currentChartData.precipSum,
-        currentChartData.cumulativePrecipData,
-        currentChartData.gddData
-    ];
+    // 2. Update Main Chart (without re-rendering everything)
+    mainChartInst.data.labels = sliceTimes;
+    mainChartInst.data.datasets[0].data = sliceTempMax;
+    mainChartInst.data.datasets[1].data = sliceTempMin;
+    mainChartInst.data.datasets[2].data = slicePrecip;
+    // We keep the cumulative lines as they are (progression from period start)
+    mainChartInst.data.datasets[3].data = currentChartData.cumulativePrecipData.slice(startIdx, endIdx + 1);
+    mainChartInst.data.datasets[4].data = currentChartData.gddData.slice(startIdx, endIdx + 1);
+    mainChartInst.update('none');
 
-    mainChartInst.data.datasets.forEach((ds, idx) => {
-        if (datasets[idx]) {
-            ds.data = datasets[idx].slice(startIdx, endIdx + 1);
+    // 3. Recalculate KPIs for the visible range
+    const validTMax = sliceTempMax.filter(v => v !== null);
+    const validTMin = sliceTempMin.filter(v => v !== null);
+    const absMax = validTMax.length ? Math.max(...validTMax) : 0;
+    const absMin = validTMin.length ? Math.min(...validTMin) : 0;
+    const totalP = slicePrecip.reduce((acc, val) => acc + (val || 0), 0);
+    const maxP = slicePrecip.length ? Math.max(...slicePrecip.map(v => v || 0)) : 0;
+    const frost = sliceTempMin.filter(v => v !== null && v < 0).length;
+    
+    // Calculate GDD specifically for this window
+    let windowGDD = 0;
+    for (let i = 0; i < sliceTimes.length; i++) {
+        const avg = ((sliceTempMax[i] || 0) + (sliceTempMin[i] || 0)) / 2;
+        windowGDD += Math.max(0, avg - 10);
+    }
+
+    // Update KPI Tiles
+    document.getElementById('kpi-temp-max').innerText = `${absMax.toFixed(1)} °C`;
+    document.getElementById('kpi-temp-min').innerText = `${absMin.toFixed(1)} °C`;
+    document.getElementById('kpi-precip-sum').innerText = `${totalP.toFixed(1)} mm`;
+    document.getElementById('kpi-gdd').innerText = `${windowGDD.toFixed(1)}`;
+    document.getElementById('kpi-precip-max').innerText = `${maxP.toFixed(1)} mm`;
+    document.getElementById('kpi-frost-days').innerText = frost;
+
+    // 4. Update Secondary (Monthly) Charts
+    updateMonthlyChartsForRange(sliceTimes, sliceTempMax, sliceTempMin, slicePrecip);
+}
+
+function updateMonthlyChartsForRange(times, tempMax, tempMin, precipSum) {
+    const monthlyPrecipMap = {};
+    const monthlyTempSumMap = {};
+    
+    times.forEach((dateStr, index) => {
+        const monthStr = dateStr.substring(0, 7);
+        if (!monthlyPrecipMap[monthStr]) {
+            monthlyPrecipMap[monthStr] = 0;
+            monthlyTempSumMap[monthStr] = 0;
         }
+        
+        const pVal = precipSum[index] || 0;
+        const tMax = tempMax[index] !== null ? tempMax[index] : 0;
+        const tMin = tempMin[index] !== null ? tempMin[index] : 0;
+        const avgTemp = (tMax + tMin) / 2;
+        
+        monthlyPrecipMap[monthStr] += pVal;
+        monthlyTempSumMap[monthStr] += (avgTemp > 0 ? avgTemp : 0);
     });
 
-    mainChartInst.update('none'); // Update without animation for performance
+    const labels = Object.keys(monthlyPrecipMap);
+    const precipData = Object.values(monthlyPrecipMap).map(v => parseFloat(v.toFixed(1)));
+    const tempSumData = Object.values(monthlyTempSumMap).map(v => parseFloat(v.toFixed(1)));
+
+    if (precipMonthlyChartInst) {
+        precipMonthlyChartInst.data.labels = labels;
+        precipMonthlyChartInst.data.datasets[0].data = precipData;
+        precipMonthlyChartInst.update('none');
+    }
+    
+    if (tempMonthlyChartInst) {
+        tempMonthlyChartInst.data.labels = labels;
+        tempMonthlyChartInst.data.datasets[0].data = tempSumData;
+        tempMonthlyChartInst.update('none');
+    }
 }
 
 function renderUnifiedChartReal() {
