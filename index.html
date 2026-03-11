@@ -4,33 +4,80 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wetter & Pflanzenwachstum Dashboard</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-measure@3.1.0/dist/leaflet-measure.css">
     <link rel="stylesheet" href="style.css">
     <link rel="manifest" href="manifest.json">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-measure@3.1.0/dist/leaflet-measure.js"></script>
 </head>
 <body>
     <header>
         <h1>Wetter & Pflanzenwachstum</h1>
+        <h2 id="location-name">Wähle einen Ort...</h2>
     </header>
     <main>
-        <section class="controls-card">
-            <form id="weather-form">
-                <div class="input-group">
-                    <label for="coordinates">Koordinaten (Lat, Lon)</label>
-                    <input type="text" id="coordinates" required placeholder="z.B. 52.0728, 12.5552">
+        <div class="top-section">
+            <section class="map-card">
+                <div id="map"></div>
+                <div class="map-controls">
+                    <label class="map-hint"><input type="checkbox" id="toggle-stations" checked> Wetterstationen anzeigen</label>
+                    <p class="map-hint">Aktiviere den roten "Picker", um einen Ort auf der Karte auszuwählen.</p>
                 </div>
-                <button type="button" id="btn-locate" class="btn-secondary">Standort ermitteln</button>
+            </section>
+            
+            <section class="controls-card">
+                <form id="weather-form">
+                    <div class="inputs-grid">
+                        <div class="input-group">
+                            <label for="coordinates">Koordinaten (Lat, Lon)</label>
+                            <div class="coord-row">
+                                <input type="text" id="coordinates" required placeholder="z.B. 52.0728, 12.5552">
+                                <button type="button" id="btn-locate" class="btn-secondary" title="Meinen Standort verwenden">📍</button>
+                            </div>
+                        </div>
+                        
+                        <div class="input-group">
+                            <label for="file-import">Fläche importieren (.kml, .plan)</label>
+                            <input type="file" id="file-import" accept=".kml,.plan" class="file-input">
+                        </div>
 
-                <div class="input-group">
-                    <label for="start-date">Startdatum</label>
-                    <input type="date" id="start-date" required>
+                        <div class="input-group">
+                            <label>Saison-Schnellauswahl</label>
+                            <div class="season-buttons">
+                                <button type="button" id="btn-season-prev" class="btn-secondary season-btn">Saison --</button>
+                                <button type="button" id="btn-season-curr" class="btn-secondary season-btn">Saison --</button>
+                            </div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="start-date">Startdatum</label>
+                            <input type="date" id="start-date" required>
+                        </div>
+                        <div class="input-group">
+                            <label for="end-date">Enddatum</label>
+                            <input type="date" id="end-date" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary btn-full">Daten abrufen</button>
+                    </div>
+                </form>
+
+                <div class="source-selector-container">
+                    <div class="source-selector">
+                        <input type="radio" id="source-om" name="weather-source" value="open-meteo" checked>
+                        <label for="source-om">Open-Meteo (Modell)</label>
+                        
+                        <input type="radio" id="source-dwd" name="weather-source" value="dwd">
+                        <label for="source-dwd" id="label-dwd">DWD / Station (Messung)</label>
+                    </div>
                 </div>
-                <div class="input-group">
-                    <label for="end-date">Enddatum</label>
-                    <input type="date" id="end-date" required>
-                </div>
-                <button type="submit" class="btn-primary">Daten abrufen</button>
-            </form>
+
             <div id="loading" class="hidden">Daten werden geladen...</div>
             <div id="error-message" class="error hidden"></div>
         </section>
@@ -48,12 +95,13 @@
                     <span class="kpi-sub">im Zeitraum</span>
                 </div>
                 <div class="kpi-card">
-                    <h3>Max. Niederschlag / Tag</h3>
-                    <p id="kpi-precip-max" class="kpi-value">-- mm</p>
+                    <h3>GDD <br>(Wachstumsgradtage)</h3>
+                    <p id="kpi-gdd" class="kpi-value">--</p>
+                    <span class="kpi-sub">Basis: 10°C</span>
                 </div>
                 <div class="kpi-card">
-                    <h3>Max. Windstärke</h3>
-                    <p id="kpi-wind-max" class="kpi-value">-- km/h</p>
+                    <h3>Max. Niederschlag / Tag</h3>
+                    <p id="kpi-precip-max" class="kpi-value">-- mm</p>
                 </div>
                 <div class="kpi-card">
                     <h3>Frosttage</h3>
@@ -63,17 +111,51 @@
             </div>
 
             <div class="charts-grid">
-                <div class="chart-card">
-                    <h3>Temperaturverlauf</h3>
-                    <canvas id="tempChart"></canvas>
+                <div class="chart-card main-chart">
+                    <h3>Kombinierter Verlauf</h3>
+                    <div class="chart-container">
+                        <canvas id="mainChart"></canvas>
+                    </div>
+                    <div class="zoom-control-bar">
+                        <div class="zoom-inputs">
+                            <label>Zeitraum:</label>
+                            <div class="zoom-slider-container">
+                                <input type="range" id="zoom-slider-start" min="0" max="100" value="0">
+                                <input type="range" id="zoom-slider-end" min="0" max="100" value="100">
+                            </div>
+                        </div>
+                        <div class="zoom-actions">
+                            <span id="zoom-period-display">Alle Daten</span>
+                            <button id="btn-reset-zoom" class="btn-secondary btn-tiny">Reset</button>
+                            <button id="btn-export-csv" class="btn-primary btn-tiny" style="margin-left: 10px;">CSV Export</button>
+                        </div>
+                    </div>
                 </div>
-                <div class="chart-card">
-                    <h3>Niederschlag (pro Tag)</h3>
-                    <canvas id="precipDailyChart"></canvas>
+            </div>
+
+            <div class="chart-controls">
+                <h3>Diagramm-Ansicht anpassen:</h3>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="toggle-temp-max" checked> Max. Temperatur</label>
+                    <label><input type="checkbox" id="toggle-temp-min" checked> Min. Temperatur</label>
+                    <label><input type="checkbox" id="toggle-precip-daily" checked> Niederschlag / Tag</label>
+                    <label><input type="checkbox" id="toggle-precip-sum" checked> Summe Niederschlag (kumuliert)</label>
+                    <label><input type="checkbox" id="toggle-gdd" checked> GDD (kumuliert)</label>
                 </div>
+            </div>
+            
+            <div class="charts-grid-secondary">
                 <div class="chart-card">
                     <h3>Niederschlag (pro Monat)</h3>
-                    <canvas id="precipMonthlyChart"></canvas>
+                    <div class="chart-container-small">
+                        <canvas id="precipMonthlyChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>Temperatursumme (pro Monat)</h3>
+                    <div class="chart-container-small">
+                        <canvas id="tempMonthlyChart"></canvas>
+                    </div>
                 </div>
             </div>
         </section>
