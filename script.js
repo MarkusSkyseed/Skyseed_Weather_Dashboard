@@ -550,6 +550,7 @@ weatherForm.addEventListener('submit', async (e) => {
         renderDashboard(dataToRender);
         updateStationInHeader(currentSource);
         dashboard.classList.remove('hidden');
+        document.body.classList.add('has-data');
     } catch (error) {
         showError("Fehler beim Abrufen der Wetterdaten: " + error.message);
     } finally {
@@ -563,17 +564,39 @@ async function fetchWeatherData(lat, lon, startDate, endDate, source) {
     }
 
     // Open-Meteo Historical API Endpoint
-    const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${startDate}&end_date=${endDate}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto`;
+    // Note: soil_temperature is only available in 'hourly' for the archive API
+    const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${startDate}&end_date=${endDate}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&hourly=soil_temperature_0_to_7cm&timezone=auto`;
     
     const response = await fetch(url);
     if (!response.ok) {
         if (response.status === 400) {
-            throw new Error("API Fehler: Wahrscheinlich liegt das Enddatum zu nah an der Gegenwart. Die Historien-API hat ca. 2 Tage Verzögerung.");
+            throw new Error("API Fehler: Wahrscheinlich liegt das Enddatum zu nah an der Gegenwart oder die Parameter sind ungültig. Die Historien-API hat ca. 2 Tage Verzögerung.");
         }
         throw new Error(`API Fehler (${response.status})`);
     }
     
-    return await response.json();
+    const rawData = await response.json();
+
+    // Aggregate hourly soil temperature to daily max
+    if (rawData.hourly && rawData.hourly.soil_temperature_0_to_7cm) {
+        const hourlySoil = rawData.hourly.soil_temperature_0_to_7cm;
+        const hourlyTime = rawData.hourly.time;
+        const dailySoilMax = {};
+
+        hourlyTime.forEach((t, i) => {
+            const date = t.split('T')[0];
+            const temp = hourlySoil[i];
+            if (temp !== null) {
+                if (!dailySoilMax[date] || temp > dailySoilMax[date]) {
+                    dailySoilMax[date] = temp;
+                }
+            }
+        });
+
+        rawData.daily.soil_temperature_0_to_7cm_max = rawData.daily.time.map(date => dailySoilMax[date] ?? null);
+    }
+
+    return rawData;
 }
 
 async function fetchBrightSkyData(lat, lon, startDate, endDate) {
@@ -599,26 +622,58 @@ async function fetchBrightSkyData(lat, lon, startDate, endDate) {
             time: [],
             temperature_2m_max: [],
             temperature_2m_min: [],
-            precipitation_sum: []
+            precipitation_sum: [],
+            soil_temperature_0_to_7cm_max: []
         }
     };
 
     const days = {};
+    const dayList = [];
     raw.weather.forEach(h => {
         const day = h.timestamp.split('T')[0];
         if (!days[day]) {
             days[day] = { temps: [], precip: 0 };
+            dayList.push(day);
         }
         if (h.temperature !== null) days[day].temps.push(h.temperature);
         if (h.precipitation !== null) days[day].precip += h.precipitation;
     });
 
-    Object.keys(days).sort().forEach(day => {
+    dayList.sort().forEach((day, index) => {
         const d = days[day];
+        const tAvgToday = d.temps.length ? d.temps.reduce((a, b) => a + b, 0) / d.temps.length : null;
+        
         dailyData.daily.time.push(day);
         dailyData.daily.temperature_2m_max.push(d.temps.length ? Math.max(...d.temps) : null);
         dailyData.daily.temperature_2m_min.push(d.temps.length ? Math.min(...d.temps) : null);
         dailyData.daily.precipitation_sum.push(parseFloat(d.precip.toFixed(1)));
+
+        // Soil temperature approximation
+        // Formula: 0.79 * T_avg_today + 0.17 * T_avg_7d + 0.17 * T_avg_14d
+        if (tAvgToday !== null) {
+            const getAvgForOffset = (daysBack) => {
+                let sum = 0;
+                let count = 0;
+                for (let i = 1; i <= daysBack; i++) {
+                    const lookupIdx = index - i;
+                    const fallbackIdx = Math.max(0, lookupIdx); // Use oldest known day as fallback
+                    const prevDay = dayList[fallbackIdx];
+                    const prevTemps = days[prevDay].temps;
+                    if (prevTemps.length) {
+                        sum += (prevTemps.reduce((a, b) => a + b, 0) / prevTemps.length);
+                        count++;
+                    }
+                }
+                return count > 0 ? sum / count : tAvgToday;
+            };
+
+            const tAvg7d = getAvgForOffset(7);
+            const tAvg14d = getAvgForOffset(14);
+            const soilTemp = (0.79 * tAvgToday) + (0.17 * tAvg7d) + (0.17 * tAvg14d);
+            dailyData.daily.soil_temperature_0_to_7cm_max.push(parseFloat(soilTemp.toFixed(1)));
+        } else {
+            dailyData.daily.soil_temperature_0_to_7cm_max.push(null);
+        }
     });
 
     return dailyData;
@@ -634,6 +689,7 @@ function prepareChartData(data) {
     const tempMax = daily.temperature_2m_max;
     const tempMin = daily.temperature_2m_min;
     const precipSum = daily.precipitation_sum;
+    const soilTempMax = daily.soil_temperature_0_to_7cm_max || new Array(times.length).fill(null);
 
     // --- Calculate KPIs ---
     const validTempMax = tempMax.filter(v => v !== null);
@@ -646,7 +702,9 @@ function prepareChartData(data) {
     const frostDaysCount = tempMin.filter(t => t !== null && t < 0).length;
 
     let totalGDD = 0;
+    let totalGDD5 = 0; // New: Basis 5°C for trees
     const gddData = [];
+    const gdd5Data = [];
     const cumulativePrecipData = [];
     let currentCumulativePrecip = 0;
 
@@ -654,10 +712,18 @@ function prepareChartData(data) {
         const tMax = tempMax[i] !== null ? tempMax[i] : 0;
         const tMin = tempMin[i] !== null ? tempMin[i] : 0;
         const avgTemp = (tMax + tMin) / 2;
+        
+        // GDD 10
         let dailyGDD = avgTemp - 10;
         if (dailyGDD < 0) dailyGDD = 0;
         totalGDD += dailyGDD;
         gddData.push(parseFloat(totalGDD.toFixed(1)));
+
+        // GDD 5
+        let dailyGDD5 = avgTemp - 5;
+        if (dailyGDD5 < 0) dailyGDD5 = 0;
+        totalGDD5 += dailyGDD5;
+        gdd5Data.push(parseFloat(totalGDD5.toFixed(1)));
 
         const precip = precipSum[i] !== null ? precipSum[i] : 0;
         currentCumulativePrecip += precip;
@@ -684,12 +750,12 @@ function prepareChartData(data) {
 
     return {
         station_name: data.station_name || null,
-        times, tempMax, tempMin, precipSum, cumulativePrecipData, gddData,
+        times, tempMax, tempMin, precipSum, soilTempMax, cumulativePrecipData, gddData, gdd5Data,
         monthlyLabels: Object.keys(monthlyPrecipMap),
         monthlyPrecipData: Object.values(monthlyPrecipMap).map(v => parseFloat(v.toFixed(1))),
         monthlyTempSumData: Object.values(monthlyTempSumMap).map(v => parseFloat(v.toFixed(1))),
         kpis: {
-            absMaxTemp, absMinTemp, totalPrecip, maxPrecipDay, frostDaysCount, totalGDD
+            absMaxTemp, absMinTemp, totalPrecip, maxPrecipDay, frostDaysCount, totalGDD, totalGDD5
         }
     };
 }
@@ -701,8 +767,8 @@ function calculateGlobalScales() {
     Object.values(allSourcesData).forEach(data => {
         if (!data) return;
         found = true;
-        maxT = Math.max(maxT, data.kpis.absMaxTemp);
-        minT = Math.min(minT, data.kpis.absMinTemp);
+        maxT = Math.max(maxT, data.kpis.absMaxTemp, ...data.soilTempMax.filter(v => v !== null));
+        minT = Math.min(minT, data.kpis.absMinTemp, ...data.soilTempMax.filter(v => v !== null));
         maxPD = Math.max(maxPD, data.kpis.maxPrecipDay);
         maxPC = Math.max(maxPC, data.kpis.totalPrecip);
         maxG = Math.max(maxG, data.kpis.totalGDD);
@@ -822,6 +888,7 @@ function applyChartZoom() {
     const sliceTempMax = currentChartData.tempMax.slice(startIdx, endIdx + 1);
     const sliceTempMin = currentChartData.tempMin.slice(startIdx, endIdx + 1);
     const slicePrecip = currentChartData.precipSum.slice(startIdx, endIdx + 1);
+    const sliceSoilTemp = currentChartData.soilTempMax.slice(startIdx, endIdx + 1);
 
     // 1. Update Zoom Text Display
     const displayRange = `${sliceTimes[0]} bis ${sliceTimes[sliceTimes.length-1]}`;
@@ -835,6 +902,7 @@ function applyChartZoom() {
     // We keep the cumulative lines as they are (progression from period start)
     mainChartInst.data.datasets[3].data = currentChartData.cumulativePrecipData.slice(startIdx, endIdx + 1);
     mainChartInst.data.datasets[4].data = currentChartData.gddData.slice(startIdx, endIdx + 1);
+    mainChartInst.data.datasets[5].data = sliceSoilTemp;
     mainChartInst.update('none');
 
     // 3. Recalculate KPIs for the visible range
@@ -861,8 +929,248 @@ function applyChartZoom() {
     document.getElementById('kpi-precip-max').innerText = `${maxP.toFixed(1)} mm`;
     document.getElementById('kpi-frost-days').innerText = frost;
 
-    // 4. Update Secondary (Monthly) Charts
+    // 4. Update Tree Evaluation
+    evaluateTreeGrowth(startIdx, endIdx);
+
+    // 5. Update Secondary (Monthly) Charts
     updateMonthlyChartsForRange(sliceTimes, sliceTempMax, sliceTempMin, slicePrecip);
+}
+
+function evaluateTreeGrowth(startIdx, endIdx) {
+    if (!currentChartData) return;
+
+    const data = currentChartData;
+    const allTimes = data.times.slice(startIdx, endIdx + 1);
+    
+    // Group indices by season
+    const seasons = {
+        'Frühjahr': { months: [3, 4, 5], indices: [], score: 'green', reason: 'Stabil' },
+        'Sommer':   { months: [6, 7, 8], indices: [], score: 'green', reason: 'Stabil' },
+        'Herbst':   { months: [9, 10, 11], indices: [], score: 'green', reason: 'Stabil' },
+        'Winter':   { months: [12, 1, 2], indices: [], score: 'green', reason: 'Stabil' }
+    };
+
+    allTimes.forEach((t, i) => {
+        const m = parseInt(t.split('-')[1]);
+        const actualIdx = startIdx + i;
+        for (const sName in seasons) {
+            if (seasons[sName].months.includes(m)) {
+                seasons[sName].indices.push(actualIdx);
+            }
+        }
+    });
+
+    const clusters = [
+        { 
+            id: 'tree-pioneer', 
+            name: 'Frühstarter', 
+            rootThreshold: 4, 
+            budGDD5: 150, 
+            heatLimit: 29, 
+            precipLimitMonth: 60,
+            winterHardy: true, 
+            desc: 'Lärche, Birke, Eberesche' 
+        },
+        { 
+            id: 'tree-flexible', 
+            name: 'Flexible Nadelbäume', 
+            rootThreshold: 6, 
+            budGDD5: 300, 
+            heatLimit: 35, 
+            precipLimitMonth: 40,
+            winterHardy: false, 
+            desc: 'Kiefer, Douglasie' 
+        },
+        { 
+            id: 'tree-cautious', 
+            name: 'Die Vorsichtigen', 
+            rootThreshold: 8, 
+            budGDD5: 450, 
+            heatLimit: 26, 
+            precipLimitMonth: 70,
+            winterHardy: true, 
+            desc: 'Buche, Weißtanne' 
+        },
+        { 
+            id: 'tree-warmth', 
+            name: 'Wärmeliebende', 
+            rootThreshold: 11, 
+            budGDD5: 650, 
+            heatLimit: 36, 
+            precipLimitMonth: 50,
+            winterHardy: false, 
+            desc: 'Eiche, Esskastanie' 
+        }
+    ];
+
+    let overallInsights = [];
+
+    clusters.forEach(c => {
+        const card = document.getElementById(c.id);
+        const container = card.querySelector('.seasonal-eval-container');
+        container.innerHTML = ''; // Clear previous
+
+        let worstScore = 'green';
+
+        for (const sName in seasons) {
+            const sIndices = seasons[sName].indices;
+            if (sIndices.length === 0) continue;
+
+            // Sliced data for this season
+            const sTempMax = sIndices.map(idx => data.tempMax[idx]);
+            const sTempMin = sIndices.map(idx => data.tempMin[idx]);
+            const sSoilTemp = sIndices.map(idx => data.soilTempMax[idx]);
+            const sPrecip = sIndices.map(idx => data.precipSum[idx]);
+            const sTimes = sIndices.map(idx => data.times[idx]);
+
+            const avgSoilTemp = sSoilTemp.filter(v => v !== null).reduce((a, b) => a + b, 0) / sSoilTemp.filter(v => v !== null).length || 0;
+            const minAirTemp = Math.min(...sTempMin.filter(v => v !== null)) || 0;
+            const totalPrecip = sPrecip.reduce((a, b) => a + (b || 0), 0);
+            const gdd5AtStart = sIndices[0] > 0 ? data.gdd5Data[sIndices[0] - 1] : 0;
+            const totalGDD5_Slice = data.gdd5Data[sIndices[sIndices.length - 1]] - gdd5AtStart;
+
+            let sScore = 'green';
+            let sReasons = [];
+            let sDetails = [];
+
+            const addWarning = (score, reason, detail) => {
+                if (score === 'red') sScore = 'red';
+                else if (score === 'yellow' && sScore !== 'red') sScore = 'yellow';
+                if (reason) sReasons.push(reason);
+                if (detail) sDetails.push(detail);
+            };
+
+            // SPRING
+            if (sName === 'Frühjahr') {
+                if (avgSoilTemp < c.rootThreshold) { 
+                    const coldDays = sIndices.filter(idx => data.soilTempMax[idx] !== null && data.soilTempMax[idx] < c.rootThreshold);
+                    const firstCold = data.times[coldDays[0]];
+                    addWarning('yellow', 'Boden zu kalt für Wurzelstart.', `Ø Bodentemperatur: ${avgSoilTemp.toFixed(1)}°C. Unterschreitung ab ${firstCold}.`);
+                }
+                
+                // Critical Early Heat (May/June focus)
+                const isEstablishmentPhase = sTimes.some(t => t.includes('-05-') || t.includes('-06-'));
+                const hotIndices = sIndices.filter(idx => data.tempMax[idx] > 28);
+                if (isEstablishmentPhase && hotIndices.length > 5 && totalPrecip < 20) {
+                    addWarning('red', 'Kritische Etablierungsphase!', `Hitze im Mai/Juni (${hotIndices.length} Tage > 28°C, z.B. ${data.times[hotIndices[0]]}) bei zu wenig Regen.`);
+                }
+
+                let frostDays = [];
+                sIndices.forEach(idx => {
+                    if (data.gdd5Data[idx] > c.budGDD5 && data.tempMin[idx] < -2) {
+                        frostDays.push(`${data.times[idx]} (${data.tempMin[idx]}°C)`);
+                    }
+                });
+                if (frostDays.length > 0) { 
+                    addWarning('red', 'Spätfrost-Schäden!', `Frost nach Austrieb am: ${frostDays.join(', ')}`);
+                }
+                
+                // Phänologische Schere
+                if (data.gdd5Data[sIndices[sIndices.length-1]] > 50 && sTempMax.filter(t => t > 15).length >= 3 && avgSoilTemp < c.rootThreshold) {
+                    const schereDay = sIndices.find(idx => data.tempMax[idx] > 15 && data.soilTempMax[idx] < c.rootThreshold);
+                    addWarning('red', 'Phänologische Schere!', `Boden zu kalt (${avgSoilTemp.toFixed(1)}°C), während Luft > 15°C Transpiration anregt (z.B. ${data.times[schereDay]}).`);
+                }
+            }
+            // SUMMER
+            else if (sName === 'Sommer') {
+                const maxHeatIdx = sIndices.reduce((maxI, currI) => (data.tempMax[currI] > data.tempMax[maxI] ? currI : maxI), sIndices[0]);
+                const maxHeat = data.tempMax[maxHeatIdx];
+                const hotIndices = sIndices.filter(idx => data.tempMax[idx] > c.heatLimit);
+                
+                // Drought calculation
+                let maxDrySpell = 0;
+                let currentDrySpell = 0;
+                let drySpellEnd = "";
+                sIndices.forEach((idx, i) => {
+                    if (data.precipSum[idx] < 1.0) {
+                        currentDrySpell++;
+                    } else {
+                        if (currentDrySpell > maxDrySpell) {
+                            maxDrySpell = currentDrySpell;
+                            drySpellEnd = data.times[idx];
+                        }
+                        currentDrySpell = 0;
+                    }
+                });
+                if (currentDrySpell > maxDrySpell) {
+                    maxDrySpell = currentDrySpell;
+                    drySpellEnd = data.times[sIndices[sIndices.length-1]];
+                }
+
+                if (maxHeat > c.heatLimit + 3 || (hotIndices.length > 7 && totalPrecip < 30)) {
+                    addWarning('red', 'Extremer Hitzestress!', `Hitze (${hotIndices.length} Tage > ${c.heatLimit}°C, Peak am ${data.times[maxHeatIdx]}: ${maxHeat.toFixed(1)}°C).`);
+                } else if (maxHeat > c.heatLimit || maxDrySpell > 14) {
+                    addWarning('yellow', 'Trockenstress-Risiko.', `${maxDrySpell} Tage ohne Regen (bis ${drySpellEnd}). Hitze-Limit (${c.heatLimit}°C) erreicht.`);
+                }
+
+                if (c.id === 'tree-cautious' && maxHeat > 28) {
+                    addWarning('red', 'Sonnenbrand-Gefahr!', `Schattbaumart auf Freifläche bei > 28°C kritisch (Peak: ${data.times[maxHeatIdx]}).`);
+                }
+            }
+            // AUTUMN
+            else if (sName === 'Herbst') {
+                if (avgSoilTemp < 5) { 
+                    const coldDay = sTimes.find((t, i) => sSoilTemp[i] < 5);
+                    addWarning('yellow', 'Wurzelwachstum verlangsamt.', `Boden unter 5°C ab ca. ${coldDay}.`);
+                }
+                const warmDays = [];
+                sIndices.forEach(idx => {
+                    const m = parseInt(data.times[idx].split('-')[1]);
+                    if ((m === 10 || m === 11) && data.tempMax[idx] > 18) warmDays.push(`${data.times[idx]} (${data.tempMax[idx]}°C)`);
+                });
+                if (warmDays.length > 0 && !c.winterHardy) { 
+                    addWarning('yellow', 'Verholzung verzögert.', `Risiko durch milde Tage: ${warmDays.join(', ')}.`);
+                }
+                const earlyFrostDays = [];
+                sIndices.forEach(idx => {
+                    const m = parseInt(data.times[idx].split('-')[1]);
+                    if ((m === 9 || m === 10) && data.tempMin[idx] < -1) earlyFrostDays.push(`${data.times[idx]} (${data.tempMin[idx]}°C)`);
+                });
+                if (earlyFrostDays.length > 0 && (c.id === 'tree-warmth' || c.id === 'tree-flexible')) { 
+                    addWarning('red', 'Frühfrost-Gefahr!', `Kritischer Frost am: ${earlyFrostDays.join(', ')}.`);
+                }
+            }
+            // WINTER
+            else if (sName === 'Winter') {
+                if (minAirTemp < -15 && !c.winterHardy) { 
+                    const coldIdx = sIndices.find(idx => data.tempMin[idx] < -15);
+                    addWarning('red', 'Gefahr durch Extremfrost.', `Tiefstwert am ${data.times[coldIdx]}: ${data.tempMin[coldIdx].toFixed(1)}°C.`);
+                }
+                const chillingCount = sTempMin.filter(t => t > 0 && t < 7).length;
+                if (c.id === 'tree-pioneer' && chillingCount < 10) {
+                    addWarning('yellow', 'Chilling Defizit.', `Nur ${chillingCount} Kältestunden (0-7°C) im Winterzeitraum.`);
+                }
+
+                if (sReasons.length === 0) sReasons.push('Winterruhe.');
+            }
+
+            if (sReasons.length === 0) sReasons.push('Gute Bedingungen.');
+
+            // Append row to container
+            const row = document.createElement('div');
+            row.className = 'seasonal-row';
+            if (sDetails.length > 0) row.title = sDetails.join('\n---\n'); // Combined Tooltip
+            row.innerHTML = `
+                <span class="season-label">${sName}</span>
+                <span class="status-dot ${sScore}"></span>
+                <span class="season-info">${sReasons.join('\n')}</span>
+            `;
+            container.appendChild(row);
+
+            // Track worst score for global card border (optional, but good for overview)
+            if (sScore === 'red') worstScore = 'red';
+            else if (sScore === 'yellow' && worstScore !== 'red') worstScore = 'yellow';
+
+            if (sScore === 'red') overallInsights.push(`${c.name} (${sName}):\n${sReasons.join('\n')}`);
+        }
+    });
+
+    const insightsEl = document.getElementById('tree-insights-text');
+    if (overallInsights.length > 0) {
+        insightsEl.innerHTML = `<ul>${overallInsights.map(i => `<li>${i}</li>`).join('')}</ul>`;
+    } else {
+        insightsEl.innerText = "Klimatische Bedingungen im gewählten Zeitraum sind stabil.";
+    }
 }
 
 function updateMonthlyChartsForRange(times, tempMax, tempMin, precipSum) {
@@ -911,6 +1219,9 @@ function renderUnifiedChartReal() {
     // Determine current zoom indices
     const startIdx = parseInt(document.getElementById('zoom-slider-start').value) || 0;
     const endIdx = parseInt(document.getElementById('zoom-slider-end').value) || (data.times.length - 1);
+
+    const isDwd = document.querySelector('input[name="weather-source"]:checked').value === 'dwd';
+    const soilLabel = isDwd ? 'Bodentemp. (approximiert)' : 'Bodentemp. (0-7cm)';
 
     // Initial labels and data should respect the current zoom sliders
     const labels = data.times.slice(startIdx, endIdx + 1);
@@ -979,6 +1290,18 @@ function renderUnifiedChartReal() {
                     yAxisID: 'yGdd',
                     customId: 'toggle-gdd',
                     hidden: !document.getElementById('toggle-gdd').checked
+                },
+                {
+                    label: soilLabel,
+                    data: data.soilTempMax.slice(startIdx, endIdx + 1),
+                    borderColor: '#805ad5', // Purple
+                    backgroundColor: 'rgba(128, 90, 213, 0.1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'yTemp',
+                    customId: 'toggle-soil-temp',
+                    hidden: !document.getElementById('toggle-soil-temp').checked
                 }
             ]
         },
@@ -1054,7 +1377,7 @@ function exportToCSV() {
     const sourceLabel = source === 'dwd' ? `DWD_Station_${currentChartData.station_name || 'unknown'}` : 'OpenMeteo';
     
     // CSV Header
-    let csvContent = "Datum;Max_Temperatur_C;Min_Temperatur_C;Niederschlag_mm;Summe_Niederschlag_mm;GDD_kumuliert\n";
+    let csvContent = "Datum;Max_Temperatur_C;Min_Temperatur_C;Niederschlag_mm;Summe_Niederschlag_mm;GDD_kumuliert;Bodentemperatur_C\n";
 
     // Data rows (using the currently zoomed/visible range from mainChartInst)
     for (let i = 0; i < labels.length; i++) {
@@ -1064,7 +1387,8 @@ function exportToCSV() {
             mainChartInst.data.datasets[1].data[i] ?? "",
             mainChartInst.data.datasets[2].data[i] ?? "",
             mainChartInst.data.datasets[3].data[i] ?? "",
-            mainChartInst.data.datasets[4].data[i] ?? ""
+            mainChartInst.data.datasets[4].data[i] ?? "",
+            mainChartInst.data.datasets[5].data[i] ?? ""
         ];
         csvContent += row.join(";") + "\n";
     }

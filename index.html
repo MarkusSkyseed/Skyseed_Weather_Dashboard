@@ -110,7 +110,7 @@
                 </div>
             </div>
 
-            <div class="charts-grid">
+            <div class="main-dashboard-content">
                 <div class="chart-card main-chart">
                     <h3>Kombinierter Verlauf</h3>
                     <div class="chart-container">
@@ -131,18 +131,61 @@
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <div class="chart-controls">
-                <h3>Diagramm-Ansicht anpassen:</h3>
-                <div class="checkbox-group">
-                    <label><input type="checkbox" id="toggle-temp-max" checked> Max. Temperatur</label>
-                    <label><input type="checkbox" id="toggle-temp-min" checked> Min. Temperatur</label>
-                    <label><input type="checkbox" id="toggle-precip-daily" checked> Niederschlag / Tag</label>
-                    <label><input type="checkbox" id="toggle-precip-sum" checked> Summe Niederschlag (kumuliert)</label>
-                    <label><input type="checkbox" id="toggle-gdd" checked> GDD (kumuliert)</label>
+                <div class="chart-sidebar">
+                    <div class="chart-controls">
+                        <h3>Ansicht / Legende:</h3>
+                        <div class="checkbox-group">
+                            <label class="legend-temp-max"><input type="checkbox" id="toggle-temp-max" checked> Max. Temp</label>
+                            <label class="legend-temp-min"><input type="checkbox" id="toggle-temp-min" checked> Min. Temp</label>
+                            <label class="legend-soil-temp"><input type="checkbox" id="toggle-soil-temp" checked> Bodentemp.</label>
+                            <label class="legend-precip-daily"><input type="checkbox" id="toggle-precip-daily" checked> Niederschlag/Tag</label>
+                            <label class="legend-precip-sum"><input type="checkbox" id="toggle-precip-sum" checked> Summe Niederschl.</label>
+                            <label class="legend-gdd"><input type="checkbox" id="toggle-gdd" checked> GDD</label>
+                        </div>
+                    </div>
                 </div>
             </div>
+
+            <!-- Saisonale Auswertung direkt unter Zoom -->
+            <div class="tree-evaluation-section">
+                <h3>Saisonale Auswertung: Baumwachstum (Basis 5°C)</h3>
+                <div class="tree-grid">
+                    <div class="tree-card" id="tree-pioneer">
+                        <div class="tree-header">
+                            <h4>Frühstarter</h4>
+                        </div>
+                        <p class="tree-desc">Lärche, Birke, Eberesche</p>
+                        <div class="seasonal-eval-container"></div>
+                    </div>
+                    <div class="tree-card" id="tree-flexible">
+                        <div class="tree-header">
+                            <h4>Flexible Nadelbäume</h4>
+                        </div>
+                        <p class="tree-desc">Kiefer, Douglasie (Herkuft)</p>
+                        <div class="seasonal-eval-container"></div>
+                    </div>
+                    <div class="tree-card" id="tree-cautious">
+                        <div class="tree-header">
+                            <h4>Die Vorsichtigen</h4>
+                        </div>
+                        <p class="tree-desc">Buche, Weißtanne</p>
+                        <div class="seasonal-eval-container"></div>
+                    </div>
+                    <div class="tree-card" id="tree-warmth">
+                        <div class="tree-header">
+                            <h4>Wärmeliebende</h4>
+                        </div>
+                        <p class="tree-desc">Eiche, Esskastanie</p>
+                        <div class="seasonal-eval-container"></div>
+                    </div>
+                </div>
+                <div class="insights-box">
+                    <h4>Besondere Erkenntnisse:</h4>
+                    <p id="tree-insights-text">Wähle einen Zeitraum aus, um Erkenntnisse zu generieren.</p>
+                </div>
+            </div>
+            <!-- ENDE: Baumarten & Wärmesummen Auswertung -->
             
             <div class="charts-grid-secondary">
                 <div class="chart-card">
