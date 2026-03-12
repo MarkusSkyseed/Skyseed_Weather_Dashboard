@@ -95,6 +95,50 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     });
+
+    // Bind Help Tooltip Toggle
+    const btnHelp = document.getElementById('btn-help-tree');
+    const tooltipHelp = document.getElementById('tooltip-help-tree');
+    const btnCloseHelp = document.getElementById('btn-close-help-tree');
+
+    if (btnHelp && tooltipHelp) {
+        btnHelp.addEventListener('click', (e) => {
+            e.stopPropagation();
+            tooltipHelp.classList.toggle('visible');
+        });
+
+        if (btnCloseHelp) {
+            btnCloseHelp.addEventListener('click', (e) => {
+                e.stopPropagation();
+                tooltipHelp.classList.remove('visible');
+            });
+        }
+
+        // Close tooltip when clicking elsewhere
+        document.addEventListener('click', (e) => {
+            if (!tooltipHelp.contains(e.target) && e.target !== btnHelp) {
+                tooltipHelp.classList.remove('visible');
+            }
+        });
+    }
+
+    // Check for URL parameters to auto-load data
+    const urlParams = new URLSearchParams(window.location.search);
+    const pLat = urlParams.get('lat');
+    const pLon = urlParams.get('lon');
+    const pStart = urlParams.get('start');
+    const pEnd = urlParams.get('end');
+
+    if (pLat && pLon) {
+        document.getElementById('coordinates').value = `${pLat}, ${pLon}`;
+        if (pStart) document.getElementById('start-date').value = pStart;
+        if (pEnd) document.getElementById('end-date').value = pEnd;
+        
+        // Trigger submit after a short delay to ensure map etc. are ready
+        setTimeout(() => {
+            weatherForm.dispatchEvent(new Event('submit'));
+        }, 500);
+    }
 });
 
 function initMap() {
@@ -565,7 +609,7 @@ async function fetchWeatherData(lat, lon, startDate, endDate, source) {
 
     // Open-Meteo Historical API Endpoint
     // Note: soil_temperature is only available in 'hourly' for the archive API
-    const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${startDate}&end_date=${endDate}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&hourly=soil_temperature_0_to_7cm&timezone=auto`;
+    const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${startDate}&end_date=${endDate}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&hourly=soil_temperature_0_to_7cm,soil_moisture_0_to_7cm&timezone=auto`;
     
     const response = await fetch(url);
     if (!response.ok) {
@@ -577,23 +621,45 @@ async function fetchWeatherData(lat, lon, startDate, endDate, source) {
     
     const rawData = await response.json();
 
-    // Aggregate hourly soil temperature to daily max
-    if (rawData.hourly && rawData.hourly.soil_temperature_0_to_7cm) {
-        const hourlySoil = rawData.hourly.soil_temperature_0_to_7cm;
+    // Aggregate hourly data to daily
+    if (rawData.hourly) {
         const hourlyTime = rawData.hourly.time;
-        const dailySoilMax = {};
 
-        hourlyTime.forEach((t, i) => {
-            const date = t.split('T')[0];
-            const temp = hourlySoil[i];
-            if (temp !== null) {
-                if (!dailySoilMax[date] || temp > dailySoilMax[date]) {
-                    dailySoilMax[date] = temp;
+        // Soil Temperature (Max)
+        if (rawData.hourly.soil_temperature_0_to_7cm) {
+            const hourlySoil = rawData.hourly.soil_temperature_0_to_7cm;
+            const dailySoilMax = {};
+
+            hourlyTime.forEach((t, i) => {
+                const date = t.split('T')[0];
+                const temp = hourlySoil[i];
+                if (temp !== null) {
+                    if (!dailySoilMax[date] || temp > dailySoilMax[date]) {
+                        dailySoilMax[date] = temp;
+                    }
                 }
-            }
-        });
+            });
+            rawData.daily.soil_temperature_0_to_7cm_max = rawData.daily.time.map(date => dailySoilMax[date] ?? null);
+        }
 
-        rawData.daily.soil_temperature_0_to_7cm_max = rawData.daily.time.map(date => dailySoilMax[date] ?? null);
+        // Soil Moisture (Mean)
+        if (rawData.hourly.soil_moisture_0_to_7cm) {
+            const hourlyMoisture = rawData.hourly.soil_moisture_0_to_7cm;
+            const dailyMoistureSum = {};
+            const dailyMoistureCount = {};
+
+            hourlyTime.forEach((t, i) => {
+                const date = t.split('T')[0];
+                const val = hourlyMoisture[i];
+                if (val !== null) {
+                    dailyMoistureSum[date] = (dailyMoistureSum[date] || 0) + val;
+                    dailyMoistureCount[date] = (dailyMoistureCount[date] || 0) + 1;
+                }
+            });
+            rawData.daily.soil_moisture_0_to_7cm_mean = rawData.daily.time.map(date => 
+                dailyMoistureCount[date] ? dailyMoistureSum[date] / dailyMoistureCount[date] : null
+            );
+        }
     }
 
     return rawData;
@@ -690,6 +756,8 @@ function prepareChartData(data) {
     const tempMin = daily.temperature_2m_min;
     const precipSum = daily.precipitation_sum;
     const soilTempMax = daily.soil_temperature_0_to_7cm_max || new Array(times.length).fill(null);
+    const soilMoisture = (daily.soil_moisture_0_to_7cm_mean || new Array(times.length).fill(null))
+        .map(v => v !== null ? parseFloat((v * 100).toFixed(1)) : null);
 
     // --- Calculate KPIs ---
     const validTempMax = tempMax.filter(v => v !== null);
@@ -750,7 +818,7 @@ function prepareChartData(data) {
 
     return {
         station_name: data.station_name || null,
-        times, tempMax, tempMin, precipSum, soilTempMax, cumulativePrecipData, gddData, gdd5Data,
+        times, tempMax, tempMin, precipSum, soilTempMax, soilMoisture, cumulativePrecipData, gddData, gdd5Data,
         monthlyLabels: Object.keys(monthlyPrecipMap),
         monthlyPrecipData: Object.values(monthlyPrecipMap).map(v => parseFloat(v.toFixed(1))),
         monthlyTempSumData: Object.values(monthlyTempSumMap).map(v => parseFloat(v.toFixed(1))),
@@ -1042,10 +1110,11 @@ function evaluateTreeGrowth(startIdx, endIdx) {
 
             // SPRING
             if (sName === 'Frühjahr') {
-                if (avgSoilTemp < c.rootThreshold) { 
-                    const coldDays = sIndices.filter(idx => data.soilTempMax[idx] !== null && data.soilTempMax[idx] < c.rootThreshold);
-                    const firstCold = data.times[coldDays[0]];
-                    addWarning('yellow', 'Boden zu kalt für Wurzelstart.', `Ø Bodentemperatur: ${avgSoilTemp.toFixed(1)}°C. Unterschreitung ab ${firstCold}.`);
+                const coldIndices = sIndices.filter(idx => data.soilTempMax[idx] !== null && data.soilTempMax[idx] < c.rootThreshold);
+                if (coldIndices.length > 5) { 
+                    const firstCold = data.times[coldIndices[0]];
+                    const tempAtDay = data.soilTempMax[coldIndices[0]];
+                    addWarning('yellow', 'Boden zu kalt für Wurzelstart.', `${coldIndices.length} Tage unter Limit. Start am ${firstCold} (${tempAtDay.toFixed(1)}°C).`);
                 }
                 
                 // Critical Early Heat (May/June focus)
@@ -1067,8 +1136,11 @@ function evaluateTreeGrowth(startIdx, endIdx) {
                 
                 // Phänologische Schere
                 if (data.gdd5Data[sIndices[sIndices.length-1]] > 50 && sTempMax.filter(t => t > 15).length >= 3 && avgSoilTemp < c.rootThreshold) {
-                    const schereDay = sIndices.find(idx => data.tempMax[idx] > 15 && data.soilTempMax[idx] < c.rootThreshold);
-                    addWarning('red', 'Phänologische Schere!', `Boden zu kalt (${avgSoilTemp.toFixed(1)}°C), während Luft > 15°C Transpiration anregt (z.B. ${data.times[schereDay]}).`);
+                    const schereDayIdx = sIndices.find(idx => data.tempMax[idx] > 15 && data.soilTempMax[idx] < c.rootThreshold);
+                    if (schereDayIdx !== undefined) {
+                        const soilTempAtDay = data.soilTempMax[schereDayIdx];
+                        addWarning('red', 'Phänologische Schere!', `Boden zu kalt (${soilTempAtDay.toFixed(1)}°C), während Luft > 15°C Transpiration anregt (z.B. ${data.times[schereDayIdx]}).`);
+                    }
                 }
             }
             // SUMMER
@@ -1109,9 +1181,12 @@ function evaluateTreeGrowth(startIdx, endIdx) {
             }
             // AUTUMN
             else if (sName === 'Herbst') {
-                if (avgSoilTemp < 5) { 
-                    const coldDay = sTimes.find((t, i) => sSoilTemp[i] < 5);
-                    addWarning('yellow', 'Wurzelwachstum verlangsamt.', `Boden unter 5°C ab ca. ${coldDay}.`);
+                const coldIndices = sIndices.filter(idx => data.soilTempMax[idx] !== null && data.soilTempMax[idx] < 5);
+                if (coldIndices.length > 0) { 
+                    const firstColdIdx = coldIndices[0];
+                    const firstColdDay = data.times[firstColdIdx];
+                    const tempAtDay = data.soilTempMax[firstColdIdx];
+                    addWarning('yellow', 'Wurzelwachstum verlangsamt.', `Boden unter 5°C ab ${firstColdDay} (${tempAtDay.toFixed(1)}°C).`);
                 }
                 const warmDays = [];
                 sIndices.forEach(idx => {
@@ -1302,6 +1377,18 @@ function renderUnifiedChartReal() {
                     yAxisID: 'yTemp',
                     customId: 'toggle-soil-temp',
                     hidden: !document.getElementById('toggle-soil-temp').checked
+                },
+                {
+                    label: 'Bodenfeuchte (%)',
+                    data: data.soilMoisture.slice(startIdx, endIdx + 1),
+                    borderColor: '#38a169',
+                    backgroundColor: 'rgba(56, 161, 105, 0.1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'yMoisture',
+                    customId: 'toggle-soil-moisture',
+                    hidden: !document.getElementById('toggle-soil-moisture').checked
                 }
             ]
         },
@@ -1360,6 +1447,15 @@ function renderUnifiedChartReal() {
                     grid: { drawOnChartArea: false },
                     min: fixedScales?.yGdd?.min,
                     max: fixedScales?.yGdd?.max
+                },
+                yMoisture: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: { display: true, text: 'Bodenfeuchte (%)' },
+                    grid: { drawOnChartArea: false },
+                    min: 0,
+                    max: 100
                 }
             }
         }

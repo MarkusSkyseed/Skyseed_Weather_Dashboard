@@ -112,7 +112,20 @@
 
             <div class="main-dashboard-content">
                 <div class="chart-card main-chart">
-                    <h3>Kombinierter Verlauf</h3>
+                    <div class="chart-header-row">
+                        <h3>Kombinierter Verlauf</h3>
+                        <div class="chart-controls">
+                            <div class="checkbox-group">
+                                <label class="legend-temp-max"><input type="checkbox" id="toggle-temp-max" checked> Max. Temp</label>
+                                <label class="legend-temp-min"><input type="checkbox" id="toggle-temp-min" checked> Min. Temp</label>
+                                <label class="legend-soil-temp"><input type="checkbox" id="toggle-soil-temp" checked> Bodentemp.</label>
+                                <label class="legend-precip-daily"><input type="checkbox" id="toggle-precip-daily" checked> Niederschlag/Tag</label>
+                                <label class="legend-precip-sum"><input type="checkbox" id="toggle-precip-sum" checked> Summe Niederschl.</label>
+                                <label class="legend-gdd"><input type="checkbox" id="toggle-gdd" checked> GDD</label>
+                                <label class="legend-soil-moisture"><input type="checkbox" id="toggle-soil-moisture" checked> Bodenfeuchte</label>
+                            </div>
+                        </div>
+                    </div>
                     <div class="chart-container">
                         <canvas id="mainChart"></canvas>
                     </div>
@@ -131,25 +144,100 @@
                         </div>
                     </div>
                 </div>
-
-                <div class="chart-sidebar">
-                    <div class="chart-controls">
-                        <h3>Ansicht / Legende:</h3>
-                        <div class="checkbox-group">
-                            <label class="legend-temp-max"><input type="checkbox" id="toggle-temp-max" checked> Max. Temp</label>
-                            <label class="legend-temp-min"><input type="checkbox" id="toggle-temp-min" checked> Min. Temp</label>
-                            <label class="legend-soil-temp"><input type="checkbox" id="toggle-soil-temp" checked> Bodentemp.</label>
-                            <label class="legend-precip-daily"><input type="checkbox" id="toggle-precip-daily" checked> Niederschlag/Tag</label>
-                            <label class="legend-precip-sum"><input type="checkbox" id="toggle-precip-sum" checked> Summe Niederschl.</label>
-                            <label class="legend-gdd"><input type="checkbox" id="toggle-gdd" checked> GDD</label>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <!-- Saisonale Auswertung direkt unter Zoom -->
             <div class="tree-evaluation-section">
-                <h3>Saisonale Auswertung: Baumwachstum (Basis 5°C)</h3>
+                <div class="section-header-with-help">
+                    <h3>Saisonale Auswertung: Baumwachstum</h3>
+                    <div class="help-icon-container">
+                        <span class="help-icon" id="btn-help-tree">?</span>
+                        <div class="help-tooltip" id="tooltip-help-tree">
+                            <span class="close-help" id="btn-close-help-tree">&times;</span>
+                            <div class="help-tooltip-content">
+                                <h4>Detaillierte Auswertungslogik</h4>
+                                <p class="help-intro">Die Analyse bewertet das Risiko für die Etablierung von Jungbäumen basierend auf meteorologischen Schwellenwerten.</p>
+                                
+                                <div class="help-season">
+                                    <strong>Frühjahr (März - Mai)</strong>
+                                    <ul>
+                                        <li><strong>Wurzelstart:</strong> Die Bodentemperatur muss die artspezifische Schwelle (4-11°C) überschreiten, damit Wasseraufnahme möglich ist.</li>
+                                        <li><strong>Phänologische Schere:</strong> Kritisch, wenn Luft >15°C Transpiration anregt, der Boden aber noch < Schwelle ist (Verdorren trotz Feuchtigkeit).</li>
+                                        <li><strong>Spätfrost:</strong> Frost <-2°C nach dem Austrieb (definiert durch kumulierte GDD5-Summe) führt zu Zellschäden an jungen Trieben.</li>
+                                        <li><strong>Etablierung:</strong> Hitze im Mai/Juni (>5 Tage >28°C) bei <20mm Regen ist kritisch für die Anwurzelung.</li>
+                                    </ul>
+                                </div>
+
+                                <div class="help-season">
+                                    <strong>Sommer (Juni - August)</strong>
+                                    <ul>
+                                        <li><strong>Hitzestress:</strong> Temperaturen über dem artspezifischen Limit führen zu Wachstumsstopp. Extremrisiko bei >7 Tagen Hitze & <30mm Regen.</li>
+                                        <li><strong>Trockenstress:</strong> Phasen von >14 Tagen ohne nennenswerten Niederschlag (<1mm) lösen Schutzmechanismen (Stomata-Schluss) aus.</li>
+                                        <li><strong>Sonnenbrand:</strong> Schattbaumarten (Buche/Tanne) reagieren auf Freiflächen bei >28°C mit Gewebeschäden.</li>
+                                    </ul>
+                                </div>
+
+                                <div class="help-season">
+                                    <strong>Herbst (September - November)</strong>
+                                    <ul>
+                                        <li><strong>Verholzung:</strong> Milde Tage (>18°C) im Okt/Nov verzögern den Abschluss des Triebwachstums und senken die Frosthärte.</li>
+                                        <li><strong>Frühfrost:</strong> Frost <-1°C im Sep/Okt trifft auf noch nicht vollständig ausgereiftes Gewebe.</li>
+                                        <li><strong>Wurzelwachstum:</strong> Verlangsamt sich deutlich bei Bodentemperaturen unter 5°C.</li>
+                                    </ul>
+                                </div>
+
+                                <div class="help-season">
+                                    <strong>Winter (Dezember - Februar)</strong>
+                                    <ul>
+                                        <li><strong>Extremfrost:</strong> Lufttemperaturen <-15°C können bei nicht winterharten Herkünften zum Zelltod führen.</li>
+                                        <li><strong>Chilling:</strong> Pionierbaumarten benötigen eine Mindestanzahl an Kältestunden (0-7°C) für einen störungsfreien Austrieb.</li>
+                                        <li><strong>Winterruhe:</strong> Die Bäume befinden sich in einer Stoffwechselpause, bis die Wärmesummen im Frühjahr steigen.</li>
+                                    </ul>
+                                </div>
+
+                                <div class="help-table-container">
+                                    <strong>Spezifische Schwellenwerte:</strong>
+                                    <table class="help-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Gruppe</th>
+                                                <th>Wurzel Ø</th>
+                                                <th>Austrieb</th>
+                                                <th>Hitze-Limit</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td>Frühstarter</td>
+                                                <td>4°C</td>
+                                                <td>150 GDD5</td>
+                                                <td>29°C</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Flexible</td>
+                                                <td>6°C</td>
+                                                <td>300 GDD5</td>
+                                                <td>35°C</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Vorsichtige</td>
+                                                <td>8°C</td>
+                                                <td>450 GDD5</td>
+                                                <td>26°C</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Wärmeliebende</td>
+                                                <td>11°C</td>
+                                                <td>650 GDD5</td>
+                                                <td>36°C</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="tree-grid">
                     <div class="tree-card" id="tree-pioneer">
                         <div class="tree-header">
@@ -162,7 +250,7 @@
                         <div class="tree-header">
                             <h4>Flexible Nadelbäume</h4>
                         </div>
-                        <p class="tree-desc">Kiefer, Douglasie (Herkuft)</p>
+                        <p class="tree-desc">Kiefer, Douglasie</p>
                         <div class="seasonal-eval-container"></div>
                     </div>
                     <div class="tree-card" id="tree-cautious">
